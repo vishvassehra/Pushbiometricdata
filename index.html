@@ -290,10 +290,9 @@ function assignLogIds(){
 }
 
 function payload(r){
-  const dev = $("deviceId").value.trim();
-  const devNum = /^\d+$/.test(dev) ? Number(dev) : dev;
-  const emp = /^\d+$/.test(r.emp) ? Number(r.emp) : r.emp;
-  return { deviceId: devNum, empId: emp, deviceLogId: r.logId, logDate: r.logDate };
+  // API expects every field as a string, e.g.
+  // {"deviceId":"19","empId":"2021343","deviceLogId":"42971","logDate":"Jul  3 2023  9:10AM"}
+  return { deviceId: $("deviceId").value.trim(), empId: String(r.emp), deviceLogId: String(r.logId), logDate: r.logDate };
 }
 
 function updateSample(){
@@ -432,6 +431,12 @@ document.querySelectorAll(".tabs button[data-f]").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".tabs button[data-f]").forEach(x=>x.classList.remove("active"));
   b.classList.add("active"); filter=b.dataset.f; render();
 });
+// Opened straight from disk (file://) there is no /api/push relay — use direct mode
+if(location.protocol==="file:"){
+  $("mode").value="direct";
+  $("mode").querySelector('option[value="proxy"]').disabled=true;
+  $("runState").textContent="Opened as a local file: sending direct to the API (run node server.js to use the relay).";
+}
 try{ const d=localStorage.getItem("bioPushDeviceId"); if(d) $("deviceId").value=d; }catch(e){}
 $("deviceId").addEventListener("change",()=>{ try{ localStorage.setItem("bioPushDeviceId",$("deviceId").value.trim()); }catch(e){} });
 updateStats();
