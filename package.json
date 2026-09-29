@@ -1,0 +1,12 @@
+{
+  "name": "bio-attendance-push",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Upload biometric DeviceLogs CSV and push each punch to saveBioServerEmployeeAttendance",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

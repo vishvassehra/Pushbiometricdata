@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bio Attendance Push</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1d2330;--muted:#6b7280;--line:#e5e7eb;
+  --brand1:#f97316;--brand2:#dc2626;--ok:#16a34a;--okbg:#dcfce7;--err:#dc2626;--errbg:#fee2e2;
+  --warn:#b45309;--warnbg:#fef3c7;--info:#2563eb;--infobg:#dbeafe;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{background:linear-gradient(90deg,var(--brand1),var(--brand2));color:#fff;padding:14px 20px}
+header h1{margin:0;font-size:18px;font-weight:600}
+header p{margin:2px 0 0;opacity:.9;font-size:12.5px;word-break:break-all}
+main{max-width:1280px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px;font-weight:500}
+input[type=text],input[type=number],select{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7px;font:inherit;background:#fff;color:var(--ink)}
+.drop{border:2px dashed #d1d5db;border-radius:10px;padding:22px;text-align:center;color:var(--muted);cursor:pointer}
+.drop.over{border-color:var(--brand1);background:#fff7ed}
+.drop b{color:var(--ink)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:inherit;border:1px solid var(--line);background:#fff;color:var(--ink);padding:7px 14px;border-radius:7px;cursor:pointer}
+button.primary{background:linear-gradient(90deg,var(--brand1),var(--brand2));color:#fff;border:0}
+button:disabled{opacity:.45;cursor:not-allowed}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px}
+.stat{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.stat .n{font-size:20px;font-weight:600}
+.stat .l{font-size:11.5px;color:var(--muted)}
+.bar{height:8px;background:#eef0f3;border-radius:6px;overflow:hidden;margin-top:10px}
+.bar > div{height:100%;width:0;background:linear-gradient(90deg,var(--brand1),var(--brand2));transition:width .2s}
+.tablewrap{overflow:auto;max-height:560px;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:#f9fafb;font-weight:600;z-index:1}
+td.resp{white-space:normal;max-width:360px;word-break:break-word;color:var(--muted);font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11.5px;font-weight:600}
+.p-pending{background:#f3f4f6;color:var(--muted)}
+.p-sending{background:var(--infobg);color:var(--info)}
+.p-success{background:var(--okbg);color:var(--ok)}
+.p-failed{background:var(--errbg);color:var(--err)}
+.p-skipped{background:var(--warnbg);color:var(--warn)}
+code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
+pre{background:#f3f4f6;padding:8px 10px;border-radius:7px;margin:6px 0 0;overflow:auto;font-size:12px}
+.muted{color:var(--muted);font-size:12px}
+.chk{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink)}
+.hidden{display:none}
+.tabs button.active{border-color:var(--brand1);color:var(--brand2);font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <h1>Bio Attendance Push</h1>
+  <p>Upload a DeviceLogs CSV → push each punch, one at a time, to <span id="hdrUrl">saveBioServerEmployeeAttendance</span></p>
+</header>
+<main>
+
+<section class="card">
+  <div class="grid">
+    <div>
+      <label for="deviceId">Device ID (sent for every punch) *</label>
+      <input type="text" id="deviceId" placeholder="e.g. 1">
+    </div>
+    <div>
+      <label for="logIdStart">deviceLogId — start from</label>
+      <input type="number" id="logIdStart" value="1" min="0">
+    </div>
+    <div>
+      <label for="mode">Send mode</label>
+      <select id="mode">
+        <option value="proxy">Live — via server proxy (/api/push)</option>
+        <option value="direct">Live — direct from browser</option>
+        <option value="mock">Mock — no API call</option>
+      </select>
+    </div>
+    <div>
+      <label for="retries">Retries per record</label>
+      <input type="number" id="retries" value="2" min="0" max="10">
+    </div>
+    <div>
+      <label for="delay">Gap between requests (ms)</label>
+      <input type="number" id="delay" value="150" min="0">
+    </div>
+  </div>
+  <div class="row" style="margin-top:12px;gap:18px">
+    <label class="chk"><input type="checkbox" id="skipSent" checked> Skip punches already pushed from this browser</label>
+    <label class="chk"><input type="checkbox" id="skipDup" checked> Skip duplicate rows in file (same employee + time)</label>
+  </div>
+  <div style="margin-top:10px">
+    <label for="apiUrl">API URL (used for direct mode)</label>
+    <input type="text" id="apiUrl" value="https://api.odpay.in/api/saveBioServerEmployeeAttendance">
+  </div>
+</section>
+
+<section class="card">
+  <div class="drop" id="drop">
+    <b>Drop DeviceLogs CSV here</b> or click to choose
+    <div class="muted" style="margin-top:4px">Columns: Log Date, Employee Code, Employee Name, Device Name, Direction, Location, Work Code, Verification Type, GPS</div>
+    <input type="file" id="file" accept=".csv,text/csv" class="hidden">
+  </div>
+  <div id="fileInfo" class="muted" style="margin-top:8px"></div>
+  <div id="samplePayload" class="hidden">
+    <div class="muted" style="margin-top:8px">Sample payload (first record):</div>
+    <pre id="sampleJson"></pre>
+  </div>
+</section>
+
+<section class="card">
+  <div class="stats">
+    <div class="stat"><div class="n" id="sTotal">0</div><div class="l">Total rows</div></div>
+    <div class="stat"><div class="n" id="sPending">0</div><div class="l">Pending</div></div>
+    <div class="stat"><div class="n" id="sSuccess" style="color:var(--ok)">0</div><div class="l">Success</div></div>
+    <div class="stat"><div class="n" id="sFailed" style="color:var(--err)">0</div><div class="l">Failed</div></div>
+    <div class="stat"><div class="n" id="sSkipped" style="color:var(--warn)">0</div><div class="l">Skipped</div></div>
+    <div class="stat"><div class="n" id="sEmp">0</div><div class="l">Employees</div></div>
+  </div>
+  <div class="bar"><div id="bar"></div></div>
+  <div class="row" style="margin-top:12px">
+    <button class="primary" id="btnStart" disabled>Start push</button>
+    <button id="btnPause" disabled>Pause</button>
+    <button id="btnRetry" disabled>Retry failed</button>
+    <button id="btnExport" disabled>Download results CSV</button>
+    <button id="btnClearSent">Clear pushed-history</button>
+    <span id="runState" class="muted"></span>
+  </div>
+</section>
+
+<section class="card">
+  <div class="row tabs" style="margin-bottom:10px">
+    <button data-f="all" class="active">All</button>
+    <button data-f="pending">Pending</button>
+    <button data-f="success">Success</button>
+    <button data-f="failed">Failed</button>
+    <button data-f="skipped">Skipped</button>
+    <input type="text" id="search" placeholder="Search employee code / name" style="max-width:240px;margin-left:auto">
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>#</th><th>Log Date (CSV)</th><th>Emp Code</th><th>Name</th><th>Verify</th>
+        <th>logDate (sent)</th><th>deviceLogId</th><th>Status</th><th>Tries</th><th>API response</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+  <div class="muted" id="tableNote" style="margin-top:6px"></div>
+</section>
+
+</main>
+<script>
+(function(){
+const $ = id => document.getElementById(id);
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const SENT_KEY = "bioPushSent:v1";
+const RENDER_LIMIT = 3000;
+
+let rows = [];          // records
+let running = false, pauseReq = false, filter = "all";
+
+// ---------- storage (best effort) ----------
+function loadSent(){ try{ return new Set(JSON.parse(localStorage.getItem(SENT_KEY)||"[]")); }catch(e){ return new Set(); } }
+let sentSet = loadSent();
+function saveSent(){ try{ localStorage.setItem(SENT_KEY, JSON.stringify([...sentSet])); }catch(e){} }
+
+// ---------- CSV parsing ----------
+function parseCSV(text){
+  text = text.replace(/^﻿/,"");
+  const out=[]; let row=[], f="", q=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(q){
+      if(c==='"'){ if(text[i+1]==='"'){ f+='"'; i++; } else q=false; }
+      else f+=c;
+    }else{
+      if(c==='"') q=true;
+      else if(c===','){ row.push(f); f=""; }
+      else if(c==='\n'){ row.push(f); out.push(row); row=[]; f=""; }
+      else if(c==='\r'){}
+      else f+=c;
+    }
+  }
+  if(f!=="" || row.length){ row.push(f); out.push(row); }
+  return out.filter(r=>r.some(x=>x.trim()!==""));
+}
+
+// "10-09-2026 22:30:11" (DD-MM-YYYY HH:mm:ss) -> Date parts
+function parseLogDate(s){
+  const m = String(s).trim().match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if(!m) return null;
+  const d={day:+m[1],mon:+m[2],yr:+m[3],h:+m[4],mi:+m[5],s:+(m[6]||0)};
+  if(d.mon<1||d.mon>12||d.day<1||d.day>31||d.h>23||d.mi>59) return null;
+  d.sort = Date.UTC(d.yr,d.mon-1,d.day,d.h,d.mi,d.s);
+  return d;
+}
+// -> "Jul  3 2023  9:10AM"
+function fmtApiDate(d){
+  const ap = d.h>=12?"PM":"AM";
+  let h = d.h%12; if(h===0) h=12;
+  return MONTHS[d.mon-1]+" "+String(d.day).padStart(2," ")+" "+d.yr+" "+String(h).padStart(2," ")+":"+String(d.mi).padStart(2,"0")+ap;
+}
+
+function loadFile(file){
+  const reader = new FileReader();
+  reader.onload = () => {
+    const grid = parseCSV(reader.result);
+    if(grid.length<2){ $("fileInfo").textContent="No data rows found."; return; }
+    const head = grid[0].map(h=>h.trim().toLowerCase());
+    const iDate=head.indexOf("log date"), iEmp=head.indexOf("employee code"),
+          iName=head.indexOf("employee name"), iVer=head.indexOf("verification type"), iDev=head.indexOf("device name");
+    if(iDate<0||iEmp<0){ $("fileInfo").textContent="Missing required columns: Log Date and Employee Code."; return; }
+    const recs=[], seen=new Set(); let bad=0;
+    for(let r=1;r<grid.length;r++){
+      const g=grid[r];
+      const raw=(g[iDate]||"").trim(), emp=(g[iEmp]||"").trim();
+      const d=parseLogDate(raw);
+      const rec={raw, emp, name: iName>=0?(g[iName]||"").trim():"", ver: iVer>=0?(g[iVer]||"").trim():"",
+                 dev: iDev>=0?(g[iDev]||"").trim():"", d, status:"pending", tries:0, resp:"", http:""};
+      if(!d||!emp){ rec.status="skipped"; rec.resp=!emp?"Missing employee code":"Unreadable Log Date"; bad++; }
+      recs.push(rec);
+    }
+    // chronological order, oldest first
+    recs.sort((a,b)=>(a.d?a.d.sort:0)-(b.d?b.d.sort:0));
+    rows = recs;
+    rows.forEach(rec=>{
+      if(rec.status!=="pending") return;
+      rec.logDate = fmtApiDate(rec.d);
+      rec.key = rec.emp+"|"+rec.raw;
+      if($("skipDup").checked && seen.has(rec.key)){ rec.status="skipped"; rec.resp="Duplicate row in file"; }
+      seen.add(rec.key);
+      if(rec.status==="pending" && $("skipSent").checked && sentSet.has(rec.key)){ rec.status="skipped"; rec.resp="Already pushed earlier from this browser"; }
+    });
+    assignLogIds();
+    const dates = rows.filter(r=>r.d);
+    const range = dates.length ? dates[0].raw.split(" ")[0]+" → "+dates[dates.length-1].raw.split(" ")[0] : "";
+    const devs=[...new Set(rows.map(r=>r.dev).filter(Boolean))];
+    $("fileInfo").innerHTML = "<b>"+esc(file.name)+"</b> · "+rows.length+" rows · "+range+(devs.length?" · Device: "+esc(devs.join(", ")):"")+(bad?" · "+bad+" unreadable":"");
+    render(); updateStats(); updateSample();
+  };
+  reader.readAsText(file);
+}
+
+function assignLogIds(){
+  let n = parseInt($("logIdStart").value,10); if(isNaN(n)) n=1;
+  rows.forEach(r=>{ if(r.d) r.logId = n++; });
+}
+
+function payload(r){
+  const dev = $("deviceId").value.trim();
+  const devNum = /^\d+$/.test(dev) ? Number(dev) : dev;
+  const emp = /^\d+$/.test(r.emp) ? Number(r.emp) : r.emp;
+  return { deviceId: devNum, empId: emp, deviceLogId: r.logId, logDate: r.logDate };
+}
+
+function updateSample(){
+  const first = rows.find(r=>r.d);
+  if(!first){ $("samplePayload").classList.add("hidden"); return; }
+  $("samplePayload").classList.remove("hidden");
+  $("sampleJson").textContent = JSON.stringify(payload(first), null, 2);
+}
+
+// ---------- rendering ----------
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function rowHTML(r,i){
+  return '<tr id="r'+i+'"><td>'+(i+1)+'</td><td>'+esc(r.raw)+'</td><td>'+esc(r.emp)+'</td><td>'+esc(r.name==="0"?"":r.name)+'</td><td>'+esc(r.ver)+
+    '</td><td><code>'+esc(r.logDate||"")+'</code></td><td>'+(r.logId??"")+'</td><td><span class="pill p-'+r.status+'">'+r.status+
+    '</span></td><td>'+(r.tries||"")+'</td><td class="resp">'+esc((r.http?"["+r.http+"] ":"")+r.resp)+'</td></tr>';
+}
+function visible(r){
+  if(filter!=="all" && r.status!==filter) return false;
+  const q=$("search").value.trim().toLowerCase();
+  if(q && !(r.emp.toLowerCase().includes(q) || r.name.toLowerCase().includes(q))) return false;
+  return true;
+}
+function render(){
+  const html=[]; let shown=0, match=0;
+  rows.forEach((r,i)=>{ if(!visible(r)) return; match++; if(shown<RENDER_LIMIT){ html.push(rowHTML(r,i)); shown++; } });
+  $("tbody").innerHTML = html.join("");
+  $("tableNote").textContent = match>shown ? "Showing first "+shown+" of "+match+" rows (use filter/search to narrow)." : "";
+}
+function updateRow(i){
+  const el=$("r"+i); if(!el) return;
+  const r=rows[i];
+  if(!visible(r)){ el.remove(); return; }
+  el.outerHTML=rowHTML(r,i);
+}
+function updateStats(){
+  const c={pending:0,sending:0,success:0,failed:0,skipped:0};
+  rows.forEach(r=>c[r.status]++);
+  $("sTotal").textContent=rows.length; $("sPending").textContent=c.pending+c.sending;
+  $("sSuccess").textContent=c.success; $("sFailed").textContent=c.failed; $("sSkipped").textContent=c.skipped;
+  $("sEmp").textContent=new Set(rows.map(r=>r.emp).filter(Boolean)).size;
+  const sendable = rows.length - c.skipped;
+  $("bar").style.width = sendable ? ((c.success+c.failed)/sendable*100).toFixed(1)+"%" : "0";
+  $("btnStart").disabled = running || (c.pending===0);
+  $("btnPause").disabled = !running;
+  $("btnRetry").disabled = running || c.failed===0;
+  $("btnExport").disabled = rows.length===0;
+  $("btnStart").textContent = (c.success||c.failed) && c.pending ? "Resume push" : "Start push";
+  ["deviceId","logIdStart","mode","apiUrl"].forEach(id=>$(id).disabled=running);
+}
+
+// ---------- sending ----------
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+function judge(httpOk, text){
+  // HTTP 2xx is success unless the JSON body explicitly says otherwise
+  if(!httpOk) return false;
+  try{
+    const j=JSON.parse(text);
+    for(const k of ["status","success","isSuccess","IsSuccess","Status","Success"]){
+      if(j && (j[k]===false || j[k]==="false" || j[k]===0 || j[k]==="0" || j[k]==="failed" || j[k]==="error")) return false;
+    }
+  }catch(e){}
+  return true;
+}
+
+async function sendOne(r){
+  const mode=$("mode").value, body=JSON.stringify(payload(r));
+  if(mode==="mock"){ await sleep(40); return {ok:true, http:"mock", text:body}; }
+  if(mode==="proxy"){
+    const res = await fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body});
+    const j = await res.json();
+    return {ok: judge(j.ok, j.body), http: j.upstreamStatus, text: j.body};
+  }
+  const res = await fetch($("apiUrl").value.trim(),{method:"POST",headers:{"Content-Type":"application/json"},body});
+  const text = await res.text();
+  return {ok: judge(res.ok, text), http: res.status, text};
+}
+
+async function run(){
+  if(!$("deviceId").value.trim()){ alertMsg("Enter the Device ID first."); $("deviceId").focus(); return; }
+  running=true; pauseReq=false; updateStats(); $("runState").textContent="Pushing…";
+  const retries=Math.max(0,parseInt($("retries").value,10)||0), gap=Math.max(0,parseInt($("delay").value,10)||0);
+  for(let i=0;i<rows.length;i++){
+    if(pauseReq) break;
+    const r=rows[i]; if(r.status!=="pending") continue;
+    r.status="sending"; updateRow(i);
+    let res=null;
+    for(let a=0;a<=retries;a++){
+      r.tries++;
+      try{ res=await sendOne(r); }catch(e){ res={ok:false,http:"ERR",text:String(e.message||e)}; }
+      if(res.ok) break;
+      if(a<retries) await sleep(600*(a+1));
+    }
+    r.status=res.ok?"success":"failed"; r.http=res.http; r.resp=(res.text||"").slice(0,500);
+    if(res.ok && $("mode").value!=="mock"){ sentSet.add(r.key); if(i%20===0) saveSent(); }
+    updateRow(i); updateStats();
+    if(gap) await sleep(gap);
+  }
+  saveSent();
+  running=false; updateStats();
+  const c=rows.filter(r=>r.status==="pending").length;
+  $("runState").textContent = pauseReq ? "Paused — "+c+" pending." : "Done.";
+}
+
+function alertMsg(m){ $("runState").textContent=m; }
+
+// ---------- export ----------
+function exportCSV(){
+  const q=v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"';
+  const lines=[["Log Date","Employee Code","Employee Name","Verification Type","deviceId","deviceLogId","logDate Sent","Status","Tries","HTTP","API Response"].map(q).join(",")];
+  const dev=$("deviceId").value.trim();
+  rows.forEach(r=>lines.push([r.raw,r.emp,r.name,r.ver,dev,r.logId,r.logDate,r.status,r.tries,r.http,r.resp].map(q).join(",")));
+  const blob=new Blob(["﻿"+lines.join("\r\n")],{type:"text/csv"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download="push-results-"+new Date().toISOString().slice(0,19).replace(/[:T]/g,"-")+".csv";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+// ---------- events ----------
+const drop=$("drop"), fileIn=$("file");
+drop.onclick=()=>fileIn.click();
+fileIn.onchange=()=>{ if(fileIn.files[0] && !running) loadFile(fileIn.files[0]); fileIn.value=""; };
+drop.ondragover=e=>{e.preventDefault();drop.classList.add("over");};
+drop.ondragleave=()=>drop.classList.remove("over");
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove("over"); if(e.dataTransfer.files[0] && !running) loadFile(e.dataTransfer.files[0]);};
+$("btnStart").onclick=run;
+$("btnPause").onclick=()=>{ pauseReq=true; $("runState").textContent="Pausing after current record…"; };
+$("btnRetry").onclick=()=>{ rows.forEach(r=>{ if(r.status==="failed"){ r.status="pending"; r.tries=0; r.resp=""; r.http=""; } }); render(); updateStats(); run(); };
+$("btnExport").onclick=exportCSV;
+$("btnClearSent").onclick=()=>{ sentSet=new Set(); saveSent(); $("runState").textContent="Pushed-history cleared for this browser."; };
+$("logIdStart").oninput=()=>{ assignLogIds(); render(); updateSample(); };
+$("deviceId").oninput=updateSample;
+$("apiUrl").oninput=()=>{};
+$("search").oninput=render;
+document.querySelectorAll(".tabs button[data-f]").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".tabs button[data-f]").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active"); filter=b.dataset.f; render();
+});
+try{ const d=localStorage.getItem("bioPushDeviceId"); if(d) $("deviceId").value=d; }catch(e){}
+$("deviceId").addEventListener("change",()=>{ try{ localStorage.setItem("bioPushDeviceId",$("deviceId").value.trim()); }catch(e){} });
+updateStats();
+})();
+</script>
+</body>
+</html>
