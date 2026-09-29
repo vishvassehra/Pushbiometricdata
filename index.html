@@ -55,33 +55,22 @@ pre{background:#f3f4f6;padding:8px 10px;border-radius:7px;margin:6px 0 0;overflo
 <body>
 <header>
   <h1>Bio Attendance Push</h1>
-  <p>Upload a DeviceLogs CSV → push each punch, one at a time, to <span id="hdrUrl">saveBioServerEmployeeAttendance</span></p>
+  <p>Upload a DeviceLogs CSV → push each punch, one at a time, to saveBioServerEmployeeAttendance</p>
 </header>
 <main>
 
 <section class="card">
   <div class="grid">
     <div>
-      <label for="deviceId">Device ID (sent for every punch) *</label>
-      <input type="text" id="deviceId" placeholder="e.g. 1">
-    </div>
-    <div>
-      <label for="logIdStart">deviceLogId — start from</label>
-      <input type="number" id="logIdStart" value="1" min="0">
+      <label for="deviceId">Device Serial Number (SerialNumber) *</label>
+      <input type="text" id="deviceId" placeholder="e.g. CEXJ213860299">
     </div>
     <div>
       <label for="mode">Send mode</label>
       <select id="mode">
-        <option value="proxy">Live — via server proxy (/api/push)</option>
-        <option value="direct">Live — direct from browser</option>
+        <option value="direct">Live — browser calls API URL directly</option>
+        <option value="proxy">Live — via Vercel relay (if API blocks CORS)</option>
         <option value="mock">Mock — no API call</option>
-      </select>
-    </div>
-    <div>
-      <label for="bodyShape">Request body</label>
-      <select id="bodyShape">
-        <option value="array">Array — [ {…} ]</option>
-        <option value="object">Single object — {…}</option>
       </select>
     </div>
     <div>
@@ -106,7 +95,7 @@ pre{background:#f3f4f6;padding:8px 10px;border-radius:7px;margin:6px 0 0;overflo
     <label class="chk"><input type="checkbox" id="skipDup" checked> Skip duplicate rows in file (same employee + time)</label>
   </div>
   <div style="margin-top:10px">
-    <label for="apiUrl">API URL (used for direct mode)</label>
+    <label for="apiUrl">API URL</label>
     <input type="text" id="apiUrl" value="https://api.odpay.in/api/saveBioServerEmployeeAttendance">
   </div>
 </section>
@@ -157,7 +146,7 @@ pre{background:#f3f4f6;padding:8px 10px;border-radius:7px;margin:6px 0 0;overflo
     <table>
       <thead><tr>
         <th>#</th><th>Log Date (CSV)</th><th>Emp Code</th><th>Name</th><th>Verify</th>
-        <th>logDate (sent)</th><th>deviceLogId</th><th>Status</th><th>Tries</th><th>API response</th>
+        <th>LogDate (sent)</th><th>Direction</th><th>Status</th><th>Tries</th><th>API response</th>
       </tr></thead>
       <tbody id="tbody"></tbody>
     </table>
@@ -235,12 +224,6 @@ function detectOrder(values){
   }
   return "DMY";
 }
-// -> "Jul  3 2023  9:10AM"
-function fmtApiDate(d){
-  const ap = d.h>=12?"PM":"AM";
-  let h = d.h%12; if(h===0) h=12;
-  return MONTHS[d.mon-1]+" "+String(d.day).padStart(2," ")+" "+d.yr+" "+String(h).padStart(2," ")+":"+String(d.mi).padStart(2,"0")+ap;
-}
 
 let lastFile=null, lastText="";
 function loadFile(file){
@@ -254,7 +237,8 @@ function processText(file, text){
     if(grid.length<2){ $("fileInfo").textContent="No data rows found."; return; }
     const head = grid[0].map(h=>h.trim().toLowerCase());
     const iDate=head.indexOf("log date"), iEmp=head.indexOf("employee code"),
-          iName=head.indexOf("employee name"), iVer=head.indexOf("verification type"), iDev=head.indexOf("device name");
+          iName=head.indexOf("employee name"), iVer=head.indexOf("verification type"), iDev=head.indexOf("device name"),
+          iDir=head.indexOf("direction"), iWork=head.indexOf("work code"), iGps=head.indexOf("gps");
     if(iDate<0||iEmp<0){ $("fileInfo").textContent="Missing required columns: Log Date and Employee Code."; return; }
     const recs=[], seen=new Set(); let bad=0;
     const order = detectOrder(grid.slice(1).map(g=>g[iDate]||""));
@@ -263,7 +247,8 @@ function processText(file, text){
       const raw=(g[iDate]||"").trim(), emp=(g[iEmp]||"").trim();
       const d=parseLogDate(raw, order);
       const rec={raw, emp, name: iName>=0?(g[iName]||"").trim():"", ver: iVer>=0?(g[iVer]||"").trim():"",
-                 dev: iDev>=0?(g[iDev]||"").trim():"", d, status:"pending", tries:0, resp:"", http:""};
+                 dev: iDev>=0?(g[iDev]||"").trim():"", dir: iDir>=0?(g[iDir]||"").trim():"",
+                 work: iWork>=0?(g[iWork]||"").trim():"", gps: iGps>=0?(g[iGps]||"").trim():"", d, status:"pending", tries:0, resp:"", http:""};
       if(!d||!emp){ rec.status="skipped"; rec.resp=!emp?"Missing employee code":"Unreadable Log Date"; bad++; }
       recs.push(rec);
     }
@@ -272,13 +257,12 @@ function processText(file, text){
     rows = recs;
     rows.forEach(rec=>{
       if(rec.status!=="pending") return;
-      rec.logDate = fmtApiDate(rec.d);
+      rec.logDate = fmtIso(rec.d);
       rec.key = rec.emp+"|"+rec.raw;
       if($("skipDup").checked && seen.has(rec.key)){ rec.status="skipped"; rec.resp="Duplicate row in file"; }
       seen.add(rec.key);
       if(rec.status==="pending" && $("skipSent").checked && sentSet.has(rec.key)){ rec.status="skipped"; rec.resp="Already pushed earlier from this browser"; }
     });
-    assignLogIds();
     const dates = rows.filter(r=>r.d);
     const dd = d => String(d.day).padStart(2,"0")+" "+MONTHS[d.mon-1]+" "+d.yr;
     const range = dates.length ? dd(dates[0].d)+" → "+dd(dates[dates.length-1].d) : "";
@@ -291,30 +275,41 @@ function processText(file, text){
   }
 }
 
-function assignLogIds(){
-  let n = parseInt($("logIdStart").value,10); if(isNaN(n)) n=1;
-  rows.forEach(r=>{ if(r.d) r.logId = n++; });
-}
+const pad=n=>String(n).padStart(2,"0");
+// -> "2026-08-25 05:51:36"
+function fmtIso(d){ return d.yr+"-"+pad(d.mon)+"-"+pad(d.day)+" "+pad(d.h)+":"+pad(d.mi)+":"+pad(d.s); }
+function nowStamp(){ const n=new Date(); return n.getFullYear()+"-"+pad(n.getMonth()+1)+"-"+pad(n.getDate())+" "+pad(n.getHours())+":"+pad(n.getMinutes())+":"+pad(n.getSeconds()); }
 
-function payload(r){
-  // API expects every field as a string, e.g.
-  // {"deviceId":"19","empId":"2021343","deviceLogId":"42971","logDate":"Jul  3 2023  9:10AM"}
-  return { deviceId: $("deviceId").value.trim(), empId: String(r.emp), deviceLogId: String(r.logId), logDate: r.logDate };
+// Body sent per punch (array of one), e.g.
+// [{"EmployeeCode":"865","DownloadDate":"2026-08-25 05:51:42","LogDate":"2026-08-25 05:51:36","DeviceName":"JMIETI",
+//   "SerialNumber":"CEXJ213860299","Direction":"INOUT","DeviceDirection":"INOUT","WorkCode":"","VerificationType":"Face","GPS":""}]
+function payload(r, downloadDate){
+  return {
+    EmployeeCode: String(r.emp),
+    DownloadDate: downloadDate || nowStamp(),
+    LogDate: r.logDate,
+    DeviceName: r.dev,
+    SerialNumber: $("deviceId").value.trim(),
+    Direction: r.dir,
+    DeviceDirection: r.dir,
+    WorkCode: r.work,
+    VerificationType: r.ver,
+    GPS: r.gps
+  };
 }
 
 function updateSample(){
   const first = rows.find(r=>r.d);
   if(!first){ $("samplePayload").classList.add("hidden"); return; }
   $("samplePayload").classList.remove("hidden");
-  const p=payload(first);
-  $("sampleJson").textContent = JSON.stringify($("bodyShape").value==="array"?[p]:p, null, 2);
+  $("sampleJson").textContent = JSON.stringify([payload(first)], null, 2);
 }
 
 // ---------- rendering ----------
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function rowHTML(r,i){
   return '<tr id="r'+i+'"><td>'+(i+1)+'</td><td>'+esc(r.raw)+'</td><td>'+esc(r.emp)+'</td><td>'+esc(r.name==="0"?"":r.name)+'</td><td>'+esc(r.ver)+
-    '</td><td><code>'+esc(r.logDate||"")+'</code></td><td>'+(r.logId??"")+'</td><td><span class="pill p-'+r.status+'">'+r.status+
+    '</td><td><code>'+esc(r.logDate||"")+'</code></td><td>'+esc(r.dir)+'</td><td><span class="pill p-'+r.status+'">'+r.status+
     '</span></td><td>'+(r.tries||"")+'</td><td class="resp">'+esc((r.http?"["+r.http+"] ":"")+r.resp)+'</td></tr>';
 }
 function visible(r){
@@ -348,7 +343,7 @@ function updateStats(){
   $("btnRetry").disabled = running || c.failed===0;
   $("btnExport").disabled = rows.length===0;
   $("btnStart").textContent = (c.success||c.failed) && c.pending ? "Resume push" : "Start push";
-  ["deviceId","logIdStart","mode","apiUrl","dateOrder","bodyShape"].forEach(id=>$(id).disabled=running);
+  ["deviceId","mode","apiUrl","dateOrder"].forEach(id=>$(id).disabled=running);
 }
 
 // ---------- sending ----------
@@ -367,8 +362,8 @@ function judge(httpOk, text){
 }
 
 async function sendOne(r){
-  const mode=$("mode").value, p=payload(r);
-  const body=JSON.stringify($("bodyShape").value==="array"?[p]:p);
+  const mode=$("mode").value;
+  const body=JSON.stringify([payload(r)]);
   if(mode==="mock"){ await sleep(40); return {ok:true, http:"mock", text:body}; }
   if(mode==="proxy"){
     const res = await fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body});
@@ -381,7 +376,7 @@ async function sendOne(r){
 }
 
 async function run(){
-  if(!$("deviceId").value.trim()){ alertMsg("Enter the Device ID first."); $("deviceId").focus(); return; }
+  if(!$("deviceId").value.trim()){ alertMsg("Enter the Device Serial Number first."); $("deviceId").focus(); return; }
   running=true; pauseReq=false; updateStats(); $("runState").textContent="Pushing…";
   const retries=Math.max(0,parseInt($("retries").value,10)||0), gap=Math.max(0,parseInt($("delay").value,10)||0);
   for(let i=0;i<rows.length;i++){
@@ -391,7 +386,7 @@ async function run(){
     let res=null;
     for(let a=0;a<=retries;a++){
       r.tries++;
-      try{ res=await sendOne(r); }catch(e){ res={ok:false,http:"ERR",text:String(e.message||e)}; }
+      try{ res=await sendOne(r); }catch(e){ const m=String(e.message||e); res={ok:false,http:"ERR",text: /fetch|network|load failed/i.test(m) && $("mode").value==="direct" ? m+" (browser blocked the call: the API must allow CORS from this site, or switch Send mode to the Vercel relay)" : m}; }
       if(res.ok) break;
       if(a<retries) await sleep(600*(a+1));
     }
@@ -411,9 +406,9 @@ function alertMsg(m){ $("runState").textContent=m; }
 // ---------- export ----------
 function exportCSV(){
   const q=v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"';
-  const lines=[["Log Date","Employee Code","Employee Name","Verification Type","deviceId","deviceLogId","logDate Sent","Status","Tries","HTTP","API Response"].map(q).join(",")];
+  const lines=[["Log Date (CSV)","EmployeeCode","Employee Name","VerificationType","SerialNumber","LogDate Sent","Status","Tries","HTTP","API Response"].map(q).join(",")];
   const dev=$("deviceId").value.trim();
-  rows.forEach(r=>lines.push([r.raw,r.emp,r.name,r.ver,dev,r.logId,r.logDate,r.status,r.tries,r.http,r.resp].map(q).join(",")));
+  rows.forEach(r=>lines.push([r.raw,r.emp,r.name,r.ver,dev,r.logDate,r.status,r.tries,r.http,r.resp].map(q).join(",")));
   const blob=new Blob(["﻿"+lines.join("\r\n")],{type:"text/csv"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
   a.download="push-results-"+new Date().toISOString().slice(0,19).replace(/[:T]/g,"-")+".csv";
@@ -432,9 +427,7 @@ $("btnPause").onclick=()=>{ pauseReq=true; $("runState").textContent="Pausing af
 $("btnRetry").onclick=()=>{ rows.forEach(r=>{ if(r.status==="failed"){ r.status="pending"; r.tries=0; r.resp=""; r.http=""; } }); render(); updateStats(); run(); };
 $("btnExport").onclick=exportCSV;
 $("btnClearSent").onclick=()=>{ sentSet=new Set(); saveSent(); $("runState").textContent="Pushed-history cleared for this browser."; };
-$("logIdStart").oninput=()=>{ assignLogIds(); render(); updateSample(); };
 $("deviceId").oninput=updateSample;
-$("bodyShape").onchange=updateSample;
 $("dateOrder").onchange=()=>{ if(lastFile && !running) processText(lastFile,lastText); };
 $("search").oninput=render;
 document.querySelectorAll(".tabs button[data-f]").forEach(b=>b.onclick=()=>{
@@ -443,9 +436,7 @@ document.querySelectorAll(".tabs button[data-f]").forEach(b=>b.onclick=()=>{
 });
 // Opened straight from disk (file://) there is no /api/push relay — use direct mode
 if(location.protocol==="file:"){
-  $("mode").value="direct";
   $("mode").querySelector('option[value="proxy"]').disabled=true;
-  $("runState").textContent="Opened as a local file: sending direct to the API (run node server.js to use the relay).";
 }
 try{ const d=localStorage.getItem("bioPushDeviceId"); if(d) $("deviceId").value=d; }catch(e){}
 $("deviceId").addEventListener("change",()=>{ try{ localStorage.setItem("bioPushDeviceId",$("deviceId").value.trim()); }catch(e){} });
