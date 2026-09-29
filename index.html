@@ -78,6 +78,13 @@ pre{background:#f3f4f6;padding:8px 10px;border-radius:7px;margin:6px 0 0;overflo
       </select>
     </div>
     <div>
+      <label for="bodyShape">Request body</label>
+      <select id="bodyShape">
+        <option value="array">Array — [ {…} ]</option>
+        <option value="object">Single object — {…}</option>
+      </select>
+    </div>
+    <div>
       <label for="dateOrder">Log Date order</label>
       <select id="dateOrder">
         <option value="auto">Auto-detect</option>
@@ -299,7 +306,8 @@ function updateSample(){
   const first = rows.find(r=>r.d);
   if(!first){ $("samplePayload").classList.add("hidden"); return; }
   $("samplePayload").classList.remove("hidden");
-  $("sampleJson").textContent = JSON.stringify(payload(first), null, 2);
+  const p=payload(first);
+  $("sampleJson").textContent = JSON.stringify($("bodyShape").value==="array"?[p]:p, null, 2);
 }
 
 // ---------- rendering ----------
@@ -340,7 +348,7 @@ function updateStats(){
   $("btnRetry").disabled = running || c.failed===0;
   $("btnExport").disabled = rows.length===0;
   $("btnStart").textContent = (c.success||c.failed) && c.pending ? "Resume push" : "Start push";
-  ["deviceId","logIdStart","mode","apiUrl","dateOrder"].forEach(id=>$(id).disabled=running);
+  ["deviceId","logIdStart","mode","apiUrl","dateOrder","bodyShape"].forEach(id=>$(id).disabled=running);
 }
 
 // ---------- sending ----------
@@ -359,7 +367,8 @@ function judge(httpOk, text){
 }
 
 async function sendOne(r){
-  const mode=$("mode").value, body=JSON.stringify(payload(r));
+  const mode=$("mode").value, p=payload(r);
+  const body=JSON.stringify($("bodyShape").value==="array"?[p]:p);
   if(mode==="mock"){ await sleep(40); return {ok:true, http:"mock", text:body}; }
   if(mode==="proxy"){
     const res = await fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body});
@@ -386,7 +395,7 @@ async function run(){
       if(res.ok) break;
       if(a<retries) await sleep(600*(a+1));
     }
-    r.status=res.ok?"success":"failed"; r.http=res.http; r.resp=(res.text||"").slice(0,500);
+    r.status=res.ok?"success":"failed"; r.http=res.http; r.resp=(res.text||"(empty response body)").slice(0,500);
     if(res.ok && $("mode").value!=="mock"){ sentSet.add(r.key); if(i%20===0) saveSent(); }
     updateRow(i); updateStats();
     if(gap) await sleep(gap);
@@ -425,6 +434,7 @@ $("btnExport").onclick=exportCSV;
 $("btnClearSent").onclick=()=>{ sentSet=new Set(); saveSent(); $("runState").textContent="Pushed-history cleared for this browser."; };
 $("logIdStart").oninput=()=>{ assignLogIds(); render(); updateSample(); };
 $("deviceId").oninput=updateSample;
+$("bodyShape").onchange=updateSample;
 $("dateOrder").onchange=()=>{ if(lastFile && !running) processText(lastFile,lastText); };
 $("search").oninput=render;
 document.querySelectorAll(".tabs button[data-f]").forEach(b=>b.onclick=()=>{
