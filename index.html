@@ -78,6 +78,14 @@ pre{background:#f3f4f6;padding:8px 10px;border-radius:7px;margin:6px 0 0;overflo
       </select>
     </div>
     <div>
+      <label for="dateOrder">Log Date order</label>
+      <select id="dateOrder">
+        <option value="auto">Auto-detect</option>
+        <option value="DMY">DD/MM/YYYY (device export)</option>
+        <option value="MDY">MM/DD/YYYY (US Excel)</option>
+      </select>
+    </div>
+    <div>
       <label for="retries">Retries per record</label>
       <input type="number" id="retries" value="2" min="0" max="10">
     </div>
@@ -187,14 +195,38 @@ function parseCSV(text){
   return out.filter(r=>r.some(x=>x.trim()!==""));
 }
 
-// "10-09-2026 22:30:11" (DD-MM-YYYY HH:mm:ss) -> Date parts
-function parseLogDate(s){
-  const m = String(s).trim().match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if(!m) return null;
-  const d={day:+m[1],mon:+m[2],yr:+m[3],h:+m[4],mi:+m[5],s:+(m[6]||0)};
-  if(d.mon<1||d.mon>12||d.day<1||d.day>31||d.h>23||d.mi>59) return null;
-  d.sort = Date.UTC(d.yr,d.mon-1,d.day,d.h,d.mi,d.s);
+// Accepts device format and Excel re-saves:
+//   10-09-2026 22:30:11 · 10/09/26 22:30 · 10.09.2026 10:30 PM · 2026-09-10 22:30:11
+// order: "DMY" (default, device export) or "MDY" (US-locale Excel)
+function parseLogDate(s, order){
+  s = String(s).trim().replace(/\s+/g," ");
+  let a,b,yr,rest, m;
+  if((m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})[ T](.+)$/))){
+    yr=+m[1]; a=+m[3]; b=+m[2]; rest=m[4]; order="DMY";   // ISO: a=day, b=month
+  }else if((m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2}|\d{4})\s+(.+)$/))){
+    a=+m[1]; b=+m[2]; yr=+m[3]; rest=m[4];
+  }else return null;
+  if(yr<100) yr+=2000;
+  const t = rest.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?\s*([AaPp][Mm])?$/);
+  if(!t) return null;
+  let h=+t[1]; const mi=+t[2], sec=+(t[3]||0), ap=t[4]&&t[4].toUpperCase();
+  if(ap){ if(h<1||h>12) return null; if(ap==="PM"&&h<12) h+=12; if(ap==="AM"&&h===12) h=0; }
+  const day = order==="MDY"?b:a, mon = order==="MDY"?a:b;
+  const d={day,mon,yr,h,mi,s:sec};
+  if(mon<1||mon>12||day<1||day>31||h>23||mi>59) return null;
+  d.sort = Date.UTC(yr,mon-1,day,h,mi,sec);
   return d;
+}
+// Pick DMY/MDY: honour the selector; on "auto" infer from any day part > 12
+function detectOrder(values){
+  const pick=$("dateOrder").value; if(pick!=="auto") return pick;
+  for(const v of values){
+    const m=String(v).trim().match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.]\d{2,4}\s/);
+    if(!m) continue;
+    if(+m[1]>12) return "DMY";
+    if(+m[2]>12) return "MDY";
+  }
+  return "DMY";
 }
 // -> "Jul  3 2023  9:10AM"
 function fmtApiDate(d){
@@ -203,20 +235,26 @@ function fmtApiDate(d){
   return MONTHS[d.mon-1]+" "+String(d.day).padStart(2," ")+" "+d.yr+" "+String(h).padStart(2," ")+":"+String(d.mi).padStart(2,"0")+ap;
 }
 
+let lastFile=null, lastText="";
 function loadFile(file){
   const reader = new FileReader();
-  reader.onload = () => {
-    const grid = parseCSV(reader.result);
+  reader.onload = () => { lastFile=file; lastText=reader.result; processText(file, reader.result); };
+  reader.readAsText(file);
+}
+function processText(file, text){
+  {
+    const grid = parseCSV(text);
     if(grid.length<2){ $("fileInfo").textContent="No data rows found."; return; }
     const head = grid[0].map(h=>h.trim().toLowerCase());
     const iDate=head.indexOf("log date"), iEmp=head.indexOf("employee code"),
           iName=head.indexOf("employee name"), iVer=head.indexOf("verification type"), iDev=head.indexOf("device name");
     if(iDate<0||iEmp<0){ $("fileInfo").textContent="Missing required columns: Log Date and Employee Code."; return; }
     const recs=[], seen=new Set(); let bad=0;
+    const order = detectOrder(grid.slice(1).map(g=>g[iDate]||""));
     for(let r=1;r<grid.length;r++){
       const g=grid[r];
       const raw=(g[iDate]||"").trim(), emp=(g[iEmp]||"").trim();
-      const d=parseLogDate(raw);
+      const d=parseLogDate(raw, order);
       const rec={raw, emp, name: iName>=0?(g[iName]||"").trim():"", ver: iVer>=0?(g[iVer]||"").trim():"",
                  dev: iDev>=0?(g[iDev]||"").trim():"", d, status:"pending", tries:0, resp:"", http:""};
       if(!d||!emp){ rec.status="skipped"; rec.resp=!emp?"Missing employee code":"Unreadable Log Date"; bad++; }
@@ -235,12 +273,15 @@ function loadFile(file){
     });
     assignLogIds();
     const dates = rows.filter(r=>r.d);
-    const range = dates.length ? dates[0].raw.split(" ")[0]+" → "+dates[dates.length-1].raw.split(" ")[0] : "";
+    const dd = d => String(d.day).padStart(2,"0")+" "+MONTHS[d.mon-1]+" "+d.yr;
+    const range = dates.length ? dd(dates[0].d)+" → "+dd(dates[dates.length-1].d) : "";
     const devs=[...new Set(rows.map(r=>r.dev).filter(Boolean))];
-    $("fileInfo").innerHTML = "<b>"+esc(file.name)+"</b> · "+rows.length+" rows · "+range+(devs.length?" · Device: "+esc(devs.join(", ")):"")+(bad?" · "+bad+" unreadable":"");
+    const parts=[ "<b>"+esc(file.name)+"</b>", rows.length+" rows", range,
+      "Dates read as "+(order==="MDY"?"MM/DD":"DD/MM"),
+      devs.length?"Device: "+esc(devs.join(", ")):"", bad?bad+" unreadable":"" ].filter(Boolean);
+    $("fileInfo").innerHTML = parts.join(" · ");
     render(); updateStats(); updateSample();
-  };
-  reader.readAsText(file);
+  }
 }
 
 function assignLogIds(){
@@ -300,7 +341,7 @@ function updateStats(){
   $("btnRetry").disabled = running || c.failed===0;
   $("btnExport").disabled = rows.length===0;
   $("btnStart").textContent = (c.success||c.failed) && c.pending ? "Resume push" : "Start push";
-  ["deviceId","logIdStart","mode","apiUrl"].forEach(id=>$(id).disabled=running);
+  ["deviceId","logIdStart","mode","apiUrl","dateOrder"].forEach(id=>$(id).disabled=running);
 }
 
 // ---------- sending ----------
@@ -385,7 +426,7 @@ $("btnExport").onclick=exportCSV;
 $("btnClearSent").onclick=()=>{ sentSet=new Set(); saveSent(); $("runState").textContent="Pushed-history cleared for this browser."; };
 $("logIdStart").oninput=()=>{ assignLogIds(); render(); updateSample(); };
 $("deviceId").oninput=updateSample;
-$("apiUrl").oninput=()=>{};
+$("dateOrder").onchange=()=>{ if(lastFile && !running) processText(lastFile,lastText); };
 $("search").oninput=render;
 document.querySelectorAll(".tabs button[data-f]").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".tabs button[data-f]").forEach(x=>x.classList.remove("active"));
